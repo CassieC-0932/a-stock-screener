@@ -38,7 +38,7 @@ def main():
             report.append("1. 近15日非一字板涨停")
             report.append("2. 剔除ST/北交所/科创板")
             report.append("3. 流通市值 50-500亿")
-            report.append("4. 股价 < 25元")
+            report.append("4. 股价 < 130元")
             report.append("5. 剔除今日涨停")
             report.append("6. MA453向上 + 站上MA10")
             report.append("7. 剔除近15日连续两天涨停")

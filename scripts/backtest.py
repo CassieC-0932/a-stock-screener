@@ -44,7 +44,7 @@ def get_static_filtered_stocks():
 def check_conditions_on_date(ts_code, date):
     """
     用历史 K 线数据检查选股条件，无前视偏差。
-    条件：当日收盘 < 25 元、未涨停、MA5>MA10>MA20 或站上 MA10。
+    条件：当日收盘 < 130 元、未涨停、MA5>MA10>MA20 或站上 MA10。
     """
     try:
         start_date = (datetime.strptime(date, '%Y%m%d') - timedelta(days=90)).strftime('%Y%m%d')
@@ -57,7 +57,7 @@ def check_conditions_on_date(ts_code, date):
         df['ma20'] = df['close'].rolling(20).mean()
         latest = df.iloc[-1]
 
-        if latest['close'] >= 25:
+        if latest['close'] >= 130:
             return False, None
         if latest['pct_chg'] >= 9.9:
             return False, None

@@ -65,7 +65,7 @@ def filter_basic_conditions(df):
     """基础条件"""
     if df.empty:
         return df
-    df = df[df['close'] < 25]
+    df = df[df['close'] < 130]
     df = df[df['pct_chg'] < 9.9]
     return df
 

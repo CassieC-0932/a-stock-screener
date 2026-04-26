@@ -139,12 +139,12 @@ def run():
     if stocks.empty:
         return "获取股票列表失败"
 
-    df = stocks[(stocks['price'] > 0) & (stocks['price'] < 25)]
+    df = stocks[(stocks['price'] > 0) & (stocks['price'] < 130)]
     df = df[(df['nmc'] > 20) & (df['nmc'] < 500)]
     print(f"基础筛选后: {len(df)} 只")
 
     if df.empty:
-        df = stocks[(stocks['price'] > 0) & (stocks['price'] < 25)]
+        df = stocks[(stocks['price'] > 0) & (stocks['price'] < 130)]
         df = df[(df['nmc'] > 10) & (df['nmc'] < 800)]
         print(f"放宽市值后: {len(df)} 只")
 
