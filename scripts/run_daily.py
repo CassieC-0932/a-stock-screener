@@ -6,13 +6,17 @@ A股选股系统 - 定时运行入口（东方财富数据源）
 
 import sys
 import os
-
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import json
+import logging
+from datetime import datetime
+from log_config import setup_logging
 from stock_filter import apply_all_filters, get_all_a_stocks
 from data_fetcher import get_stock_basic
-from datetime import datetime
-import json
+
+setup_logging()
+logger = logging.getLogger(__name__)
 
 
 def main():

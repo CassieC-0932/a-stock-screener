@@ -133,5 +133,11 @@ def analyze_stocks(json_path):
     print("=" * 60)
 
 if __name__ == "__main__":
-    json_path = Path(__file__).parent / "reports" / "2026-03-29.json"
-    analyze_stocks(json_path)
+    reports_dir = Path(__file__).parent / "reports"
+    json_files = sorted(reports_dir.glob("*.json"), reverse=True)
+    if not json_files:
+        print(f"未找到报告文件，请先运行 run_daily.py 生成报告。目录: {reports_dir}")
+    else:
+        json_path = json_files[0]
+        print(f"分析最新报告: {json_path.name}")
+        analyze_stocks(json_path)

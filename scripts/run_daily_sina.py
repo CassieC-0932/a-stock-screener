@@ -9,63 +9,12 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import requests
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 import json
-from data_fetcher import get_kline_tencent
-
-
-def get_all_stock_codes():
-    """获取所有A股代码列表 - 新浪数据源"""
-    stocks = []
-    page_size = 80
-
-    for page in range(1, 75):
-        try:
-            url = (f"http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/"
-                   f"Market_Center.getHQNodeData?page={page}&num={page_size}"
-                   f"&sort=nmc&asc=1&node=hs_a&_s_r_a=sort")
-            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-            text = resp.text.strip()
-            if not text or text == 'null':
-                break
-            data = json.loads(text)
-            if not data:
-                break
-
-            for item in data:
-                code = item.get('code', '')
-                name = item.get('name', '')
-                if 'ST' in name or '*ST' in name:
-                    continue
-                if code.startswith('9') or code.startswith('4') or code.startswith('688'):
-                    continue
-
-                settlement = float(item.get('settlement', 0))
-                trade = float(item.get('trade', 0))
-                price = trade if trade > 0 else settlement
-                pct_chg = float(item.get('changepercent', 0))
-                if price <= 0:
-                    continue
-
-                stocks.append({
-                    'code': code, 'name': name, 'price': price,
-                    'settlement': settlement, 'pct_chg': pct_chg,
-                    'nmc': float(item.get('nmc', 0)) / 10000,
-                    'mktcap': float(item.get('mktcap', 0)) / 10000,
-                    'turnover_rate': float(item.get('turnoverratio', 0)),
-                })
-
-            time.sleep(0.2)
-        except Exception as e:
-            print(f"第{page}页失败: {e}")
-            break
-
-    print(f"获取到 {len(stocks)} 只股票")
-    return pd.DataFrame(stocks)
+from data_fetcher import get_kline_tencent, get_all_stock_codes_sina as get_all_stock_codes
 
 
 def analyze_stock(code, name, kline_df):
@@ -202,7 +151,8 @@ def run():
     if df.empty:
         return "无股票通过筛选"
 
-    candidates = df.sample(min(600, len(df)), random_state=42) if len(df) > 600 else df
+    # 按流通市值升序截取（小市值优先），避免固定随机种子每天选同一批
+    candidates = df.sort_values('nmc').head(600) if len(df) > 600 else df
 
     print(f"开始技术分析 ({len(candidates)} 只)...")
     results = []

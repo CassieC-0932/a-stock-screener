@@ -3,9 +3,12 @@
 A股选股系统 - 技术分析模块
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from data_fetcher import get_daily_data, get_previous_trade_day
+
+logger = logging.getLogger(__name__)
 
 
 def calculate_ma(df, periods=[5, 10, 20, 60]):

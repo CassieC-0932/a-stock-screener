@@ -20,6 +20,10 @@ def get_auction_data(ts_code):
 
 def get_tencent_data(ts_code):
     """使用腾讯API获取股票数据"""
+    # 腾讯实时行情 ~ 分隔字段索引:
+    # [0]市场 [1]名称 [2]代码 [3]现价 [4]昨收 [5]今开 [6]总量(手) [7]外盘 [8]内盘
+    # [9]买1价 [10]买1量 [11]买2价 [12]买2量 ... [19]卖1价 [20]卖1量 ...
+    # [29]时间 [30]涨跌额 [31]涨幅% [32]最高 [33]最低
     try:
         code = ts_code.replace('.SH', 'sh').replace('.SZ', 'sz')
         url = f"http://qt.gtimg.cn/q={code}"
@@ -27,14 +31,14 @@ def get_tencent_data(ts_code):
         response = requests.get(url, headers=headers, timeout=5)
         if response.text and 'v_' in response.text:
             parts = response.text.split('"')[1].split('~')
-            if len(parts) > 5:
+            if len(parts) > 33:
                 pre_close = float(parts[4]) if parts[4] else 0
-                open_price = float(parts[3]) if parts[3] else 0
-                current_price = float(parts[5]) if parts[5] else open_price
-                high = float(parts[6]) if len(parts) > 6 and parts[6] else current_price
-                low = float(parts[7]) if len(parts) > 7 and parts[7] else open_price
-                bid_vol1 = float(parts[12]) if len(parts) > 12 and parts[12] else 0
-                ask_vol1 = float(parts[14]) if len(parts) > 14 and parts[14] else 0
+                open_price = float(parts[5]) if parts[5] else 0
+                current_price = float(parts[3]) if parts[3] else open_price
+                high = float(parts[32]) if parts[32] else current_price
+                low = float(parts[33]) if parts[33] else open_price
+                bid_vol1 = float(parts[10]) if parts[10] else 0
+                ask_vol1 = float(parts[20]) if parts[20] else 0
                 order_ratio = 0
                 if (bid_vol1 + ask_vol1) > 0:
                     order_ratio = (bid_vol1 - ask_vol1) / (bid_vol1 + ask_vol1) * 100
@@ -45,15 +49,15 @@ def get_tencent_data(ts_code):
                     'high': high,
                     'low': low,
                     'current': current_price,
-                    'volume': float(parts[7]) if len(parts) > 7 and parts[7] else 0,
-                    'amount': float(parts[8]) if len(parts) > 8 and parts[8] else 0,
+                    'volume': float(parts[6]) if parts[6] else 0,
+                    'amount': 0,
                     'turnover': 0,
                     'auction_price': 0,
                     'auction_vol': 0,
                     'auction_amount': 0,
-                    'bid_price1': float(parts[11]) if len(parts) > 11 and parts[11] else 0,
+                    'bid_price1': float(parts[9]) if parts[9] else 0,
                     'bid_vol1': bid_vol1,
-                    'ask_price1': float(parts[13]) if len(parts) > 13 and parts[13] else 0,
+                    'ask_price1': float(parts[19]) if parts[19] else 0,
                     'ask_vol1': ask_vol1,
                     'order_ratio': order_ratio,
                 }

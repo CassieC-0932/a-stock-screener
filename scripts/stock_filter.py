@@ -4,11 +4,15 @@ A股选股系统 - 选股过滤器（成长版）
 重点：低位优质成长股 + 三大优化条件
 """
 
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from data_fetcher import get_stock_basic, get_daily_data, get_previous_trade_day
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 def get_all_a_stocks():
@@ -20,7 +24,8 @@ def get_all_a_stocks():
     def filter_stock(row):
         name = str(row.get('name', ''))
         ts_code = str(row.get('ts_code', ''))
-        if 'ST' in name or '*ST' in name or 'S' in name:
+        # 精确匹配 ST 前缀，避免过滤名称中含 "S" 的正常股票
+        if name.startswith('ST') or name.startswith('*ST') or name.startswith('S*'):
             return False
         if ts_code.endswith('.BJ'):
             return False
@@ -145,9 +150,6 @@ def analyze_growth_stock(ts_code, hot_sectors):
 
     growth_trend = latest['ma5'] > latest['ma20'] and latest['close'] > latest['ma20']
 
-    if len(df) >= 5:
-        recent_up = df.iloc[-5:]['close'].iloc[-1] > df.iloc[-5:]['close'].iloc[0] * 1.05
-
     if is_low and growth_trend:
         score += 5
         signals.append("低位成长")
@@ -230,29 +232,40 @@ def apply_all_filters(stocks):
     hot_sectors = get_hot_sectors()
     print(f"热门板块: {hot_sectors[:5]}...")
 
-    print("分析中...")
+    print(f"并发技术分析 ({len(df)} 只)...")
+    rows = [row for _, row in df.iterrows()]
+
+    def _analyze(row):
+        return row, analyze_growth_stock(row['ts_code'], hot_sectors)
+
     results = []
-    for idx, row in df.iterrows():
-        ts_code = row['ts_code']
-        try:
-            analysis = analyze_growth_stock(ts_code, hot_sectors)
-            if analysis:
-                row['score'] = analysis['score']
-                row['signals'] = ','.join(analysis['signals'])
-                row['warnings'] = ','.join(analysis['warnings']) if analysis['warnings'] else ''
-                row['category'] = analysis['category']
-                row['is_low'] = analysis['is_low']
-                row['growth'] = analysis['growth']
-                row['macd_golden'] = analysis['macd_golden']
-                row['vol_ratio'] = analysis['vol_ratio']
-                row['ma5'] = analysis['ma5']
-                row['ma10'] = analysis['ma10']
-                row['ma20'] = analysis['ma20']
-                row['ma60'] = analysis['ma60']
-                row['price_vs_ma60'] = analysis['price_vs_ma60']
-                results.append(row)
-        except Exception:
-            continue
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = {executor.submit(_analyze, row): row for row in rows}
+        done = 0
+        for future in as_completed(futures):
+            done += 1
+            if done % 100 == 0:
+                print(f"  进度: {done}/{len(rows)}")
+            try:
+                row, analysis = future.result()
+                if analysis:
+                    row = row.copy()
+                    row['score'] = analysis['score']
+                    row['signals'] = ','.join(analysis['signals'])
+                    row['warnings'] = ','.join(analysis['warnings']) if analysis['warnings'] else ''
+                    row['category'] = analysis['category']
+                    row['is_low'] = analysis['is_low']
+                    row['growth'] = analysis['growth']
+                    row['macd_golden'] = analysis['macd_golden']
+                    row['vol_ratio'] = analysis['vol_ratio']
+                    row['ma5'] = analysis['ma5']
+                    row['ma10'] = analysis['ma10']
+                    row['ma20'] = analysis['ma20']
+                    row['ma60'] = analysis['ma60']
+                    row['price_vs_ma60'] = analysis['price_vs_ma60']
+                    results.append(row)
+            except Exception:
+                continue
 
     print(f"技术筛选后: {len(results)}")
     if not results:

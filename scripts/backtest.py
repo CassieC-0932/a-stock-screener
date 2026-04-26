@@ -1,202 +1,144 @@
 # -*- coding: utf-8 -*-
 """
-A股选股系统 - 历史回测（基础版）
+A股选股系统 - 历史回测（修正版）
+
+修复前视偏差：股票池用今日静态信息过滤（ST/交易所），
+价格/MA 等条件全部从历史 K 线取当日数据计算，不使用实时行情。
+
+已知局限：
+- 用当前股票列表作为历史股票池，存在幸存者偏差（退市股被排除）
+- 市值过滤需历史市值数据，K 线不包含，已移除该过滤条件
+- 交易日历仅排除周末，不含中国法定节假日
 """
 
-import requests
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import logging
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from log_config import setup_logging
+from data_fetcher import get_stock_basic, get_daily_data, get_recent_trade_days
+
+logger = logging.getLogger(__name__)
 
 
-def get_stock_basic():
-    """获取股票基本信息"""
+def get_static_filtered_stocks():
+    """
+    获取股票池：仅做静态过滤（ST/北交所/科创板），
+    不使用任何实时价格字段，避免引入前视数据。
+    """
+    stocks = get_stock_basic()
+    if stocks.empty:
+        return pd.DataFrame()
+    mask = (
+        ~stocks['name'].str.contains('ST', na=False) &
+        ~stocks['ts_code'].str.endswith('.BJ') &
+        ~stocks['ts_code'].str.startswith('688')
+    )
+    return stocks[mask].reset_index(drop=True)
+
+
+def check_conditions_on_date(ts_code, date):
+    """
+    用历史 K 线数据检查选股条件，无前视偏差。
+    条件：当日收盘 < 25 元、未涨停、MA5>MA10>MA20 或站上 MA10。
+    """
     try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        all_stocks = []
-        url = "http://push2.eastmoney.com/api/qt/clist/get"
-        for pn in range(1, 13):
-            params = {
-                'pn': pn, 'pz': 500, 'po': 1, 'np': 1,
-                'ut': 'bd1d9ddb04089700cf9c27f6f7426281',
-                'fltt': 2, 'invt': 2, 'fid': 'f3',
-                'fs': 'm:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23',
-                'fields': 'f2,f3,f4,f5,f6,f7,f12,f14,f20,f21'
-            }
-            try:
-                resp = requests.get(url, params=params, headers=headers, timeout=10)
-                dt = resp.json()
-                if dt['data']['diff']:
-                    all_stocks.extend(dt['data']['diff'])
-                else:
-                    break
-            except Exception:
-                break
-
-        if all_stocks:
-            df = pd.DataFrame(all_stocks)
-            column_mapping = {
-                'f12': 'ts_code', 'f14': 'name', 'f2': 'close',
-                'f3': 'pct_chg', 'f4': 'change', 'f5': 'vol',
-                'f6': 'amount', 'f7': 'turnover_rate',
-                'f20': 'total_mv', 'f21': 'circ_mv',
-            }
-            df = df.rename(columns=column_mapping)
-            def add_suffix(code):
-                code = str(code)
-                if code.startswith('6'):
-                    return code + '.SH'
-                elif code.startswith('0') or code.startswith('3'):
-                    return code + '.SZ'
-                return code + '.BJ'
-            df['ts_code'] = df['ts_code'].apply(add_suffix)
-            for col in ['close', 'pct_chg', 'vol', 'amount', 'turnover_rate']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce')
-            for col in ['total_mv', 'circ_mv']:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce') / 100000000
-            return df
-    except Exception as e:
-        print(f"获取数据失败: {e}")
-    return pd.DataFrame()
-
-
-def get_daily_data(ts_code, start_date, end_date):
-    """获取历史K线"""
-    try:
-        code = ts_code.replace('.SH', '').replace('.SZ', '')
-        url = "http://32.push2his.eastmoney.com/api/qt/stock/kline/get"
-        params = {
-            'secid': f"1.{code}" if code.startswith('6') else f"0.{code}",
-            'fields1': 'f1,f2,f3,f4,f5,f6',
-            'fields2': 'f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61',
-            'klt': 101, 'fqt': 1, 'beg': start_date, 'end': end_date, 'lmt': 60
-        }
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, params=params, headers=headers, timeout=10)
-        data = response.json()
-        if data['data'] and data['data']['klines']:
-            klines = data['data']['klines']
-            records = []
-            for kline in klines:
-                items = kline.split(',')
-                records.append({
-                    'trade_date': items[0],
-                    'close': float(items[2]),
-                    'pct_chg': float(items[8]) if len(items) > 8 else 0
-                })
-            return pd.DataFrame(records)
-    except Exception:
-        pass
-    return pd.DataFrame()
-
-
-def get_trade_dates(days=5):
-    """获取过去n个交易日"""
-    dates = []
-    today = datetime.now()
-    for _ in range(days * 3):
-        today -= timedelta(days=1)
-        if today.weekday() < 5:
-            dates.append(today.strftime('%Y%m%d'))
-            if len(dates) >= days:
-                break
-    return dates
-
-
-def filter_stocks(df):
-    """筛选条件"""
-    if df.empty:
-        return df
-    df = df[~df['name'].str.contains('ST', na=False)]
-    df = df[~df['ts_code'].str.endswith('.BJ')]
-    df = df[~df['ts_code'].str.startswith('688')]
-    df = df[df['close'] < 25]
-    df = df[df['pct_chg'] < 9.9]
-    df = df[df['circ_mv'] > 50]
-    df = df[df['circ_mv'] < 500]
-    return df
-
-
-def check_ma(ts_code, date):
-    """检查MA条件"""
-    try:
-        start_date = (datetime.strptime(date, '%Y%m%d') - timedelta(days=60)).strftime('%Y%m%d')
+        start_date = (datetime.strptime(date, '%Y%m%d') - timedelta(days=90)).strftime('%Y%m%d')
         df = get_daily_data(ts_code, start_date, date)
         if df.empty or len(df) < 20:
-            return False
+            return False, None
+
         df['ma5'] = df['close'].rolling(5).mean()
         df['ma10'] = df['close'].rolling(10).mean()
         df['ma20'] = df['close'].rolling(20).mean()
         latest = df.iloc[-1]
+
+        if latest['close'] >= 25:
+            return False, None
+        if latest['pct_chg'] >= 9.9:
+            return False, None
+
         above_ma10 = latest['close'] > latest['ma10']
         ma_up = latest['ma5'] > latest['ma10'] > latest['ma20']
-        return above_ma10 and ma_up
+        if above_ma10 or ma_up:
+            return True, latest['close']
     except Exception:
-        return False
+        pass
+    return False, None
 
 
 def backtest(days=5):
-    """历史回测"""
-    print(f"=== 历史回测 (过去{days}天) ===\n")
-    trade_dates = get_trade_dates(days)
-    print(f"交易日期: {trade_dates}\n")
-    stocks = get_stock_basic()
-    print(f"股票总数: {len(stocks)}")
+    """历史回测：对过去每个交易日模拟选股，统计次日涨跌"""
+    print(f"=== 历史回测（过去 {days} 个交易日）===\n")
+    trade_dates = get_recent_trade_days(days)
+    print(f"回测日期（新→旧）: {trade_dates}\n")
+
+    stocks = get_static_filtered_stocks()
+    print(f"静态过滤后股票池: {len(stocks)} 只\n")
+    if stocks.empty:
+        return []
 
     results = []
     for date in trade_dates:
-        print(f"\n--- 回测日期: {date} ---")
-        df = filter_stocks(stocks.copy())
-        print(f"基础筛选后: {len(df)} 只")
+        print(f"--- 回测日期: {date} ---")
         selected = []
-        for _, row in df.iterrows():
-            if check_ma(row['ts_code'], date):
-                selected.append(row)
-        print(f"MA筛选后: {len(selected)} 只")
+        for _, row in stocks.iterrows():
+            passed, close_price = check_conditions_on_date(row['ts_code'], date)
+            if passed:
+                selected.append({'ts_code': row['ts_code'], 'name': row['name'], 'close': close_price})
+
+        print(f"当日选出: {len(selected)} 只")
         if not selected:
             continue
-        next_date_idx = trade_dates.index(date) + 1
-        if next_date_idx >= len(trade_dates):
+
+        # 找次日（列表中下一个更早的日期）
+        date_idx = trade_dates.index(date)
+        if date_idx + 1 >= len(trade_dates):
             print("无次日数据，跳过")
             continue
-        next_date = trade_dates[next_date_idx]
-        up_count = 0
-        down_count = 0
-        for row in selected:
+        next_date = trade_dates[date_idx + 1]
+
+        up, down = 0, 0
+        for s in selected:
             try:
-                kline = get_daily_data(row['ts_code'], next_date, next_date)
+                kline = get_daily_data(s['ts_code'], next_date, next_date)
                 if not kline.empty:
                     pct = kline.iloc[0]['pct_chg']
                     if pct > 0:
-                        up_count += 1
+                        up += 1
                     else:
-                        down_count += 1
+                        down += 1
             except Exception:
                 pass
-        if up_count + down_count > 0:
-            accuracy = up_count / (up_count + down_count) * 100
-            print(f"次日上涨: {up_count}只 ({accuracy:.1f}%)")
-            print(f"次日下跌: {down_count}只")
+
+        if up + down > 0:
+            accuracy = up / (up + down) * 100
+            print(f"次日上涨: {up} 只  次日下跌: {down} 只  准确率: {accuracy:.1f}%")
             results.append({
                 'date': date, 'selected': len(selected),
-                'up': up_count, 'down': down_count, 'accuracy': accuracy
+                'up': up, 'down': down, 'accuracy': accuracy
             })
+        print()
 
-    print("\n" + "=" * 50)
+    print("=" * 50)
     print("=== 回测汇总 ===")
-    total_selected = sum(r['selected'] for r in results)
-    total_up = sum(r['up'] for r in results)
-    total_down = sum(r['down'] for r in results)
-    overall_accuracy = total_up / (total_up + total_down) * 100 if (total_up + total_down) > 0 else 0
-    print(f"总选股次数: {total_selected}")
-    print(f"次日上涨: {total_up}只 ({overall_accuracy:.1f}%)")
-    print(f"次日下跌: {total_down}只")
-    print("\n每日详情:")
-    for r in results:
-        print(f"  {r['date']}: 选{r['selected']}只，涨{r['up']}只 ({r['accuracy']:.1f}%)")
+    if results:
+        total_up = sum(r['up'] for r in results)
+        total_down = sum(r['down'] for r in results)
+        overall = total_up / (total_up + total_down) * 100 if (total_up + total_down) > 0 else 0
+        print(f"次日上涨合计: {total_up} 只  下跌合计: {total_down} 只  综合准确率: {overall:.1f}%")
+        print("\n每日详情:")
+        for r in results:
+            print(f"  {r['date']}: 选 {r['selected']} 只，涨 {r['up']} 只 ({r['accuracy']:.1f}%)")
+    else:
+        print("无有效回测数据")
     return results
 
+
 if __name__ == "__main__":
-    results = backtest(5)
+    setup_logging()
+    backtest(5)
