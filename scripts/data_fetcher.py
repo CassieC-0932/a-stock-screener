@@ -7,12 +7,14 @@ A股选股系统 - 数据获取模块
 """
 
 import json
+import pickle
 import time
 import logging
 import requests
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Optional
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,25 @@ _stock_basic_cache_ts: Optional[datetime] = None
 _CACHE_TTL_SECONDS = 300  # 5 分钟内复用，避免同次运行重复请求
 
 _trade_date_cache: List[str] = []   # 降序排列的交易日字符串列表 "YYYYMMDD"
+_trade_date_warned: bool = False    # 避免 akshare 缺失警告重复打印
+
+# ── K 线磁盘缓存 ──────────────────────────────────────────────────────────────
+_KLINE_CACHE_DIR = Path(__file__).parent.parent / "logs" / "kline_cache"
+
+
+def _kline_cache_path(ts_code: str, start_date: str, end_date: str) -> Path:
+    safe = ts_code.replace('.', '_')
+    return _KLINE_CACHE_DIR / f"{safe}_{start_date}_{end_date}.pkl"
+
+
+def _kline_cache_valid(path: Path, end_date: str) -> bool:
+    if not path.exists():
+        return False
+    today = datetime.now().strftime('%Y%m%d')
+    if end_date < today:
+        return True  # 历史区间数据不变，永久有效
+    # 今日数据：缓存文件需是今天写入的
+    return datetime.fromtimestamp(path.stat().st_mtime).date() == datetime.now().date()
 
 
 # ── 交易日历 ──────────────────────────────────────────────────────────────────
@@ -48,7 +69,10 @@ def get_trade_date_list() -> List[str]:
         logger.info("交易日历加载完成，共 %d 个交易日", len(dates))
         return dates
     except Exception as e:
-        logger.warning("AKShare 交易日历获取失败（%s），退化为周历估算", e)
+        global _trade_date_warned
+        if not _trade_date_warned:
+            logger.warning("AKShare 交易日历获取失败（%s），退化为周历估算", e)
+            _trade_date_warned = True
     return []
 
 
@@ -179,11 +203,20 @@ def get_stock_basic() -> pd.DataFrame:  # noqa
 # ── K 线数据 ──────────────────────────────────────────────────────────────────
 
 def get_daily_data(ts_code: str, start_date: str, end_date: Optional[str] = None) -> pd.DataFrame:
-    """获取日 K 线数据 - 东方财富"""
+    """获取日 K 线数据 - 东方财富（带磁盘缓存）"""
     if end_date is None:
         end_date = datetime.now().strftime('%Y%m%d')
+
+    cache_path = _kline_cache_path(ts_code, start_date, end_date)
+    if _kline_cache_valid(cache_path, end_date):
+        try:
+            with open(cache_path, 'rb') as f:
+                return pickle.load(f)
+        except Exception:
+            pass
+
     try:
-        code = ts_code.replace('.SH', '').replace('.SZ', '')
+        code = ts_code.replace('.SH', '').replace('.SZ', '').replace('.BJ', '')
         url = "http://32.push2his.eastmoney.com/api/qt/stock/kline/get"
         params = {
             'secid': f"1.{code}" if code.startswith('6') else f"0.{code}",
@@ -207,6 +240,12 @@ def get_daily_data(ts_code: str, start_date: str, end_date: Optional[str] = None
                 })
             df = pd.DataFrame(records)
             df['ts_code'] = ts_code
+            try:
+                _KLINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                with open(cache_path, 'wb') as f:
+                    pickle.dump(df, f)
+            except Exception:
+                pass
             return df
     except Exception as e:
         logger.debug("获取 %s K线失败: %s", ts_code, e)
@@ -305,7 +344,7 @@ def get_index_daily(index_code: str = '000001', start_date: Optional[str] = None
             'end': datetime.now().strftime('%Y%m%d'),
             'lmt': 60
         }
-        response = requests.get(url, params={'User-Agent': 'Mozilla/5.0'}, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+        response = requests.get(url, params=params, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         data = response.json()
         if data['data'] and data['data']['klines']:
             records = []
@@ -322,3 +361,64 @@ def get_index_daily(index_code: str = '000001', start_date: Optional[str] = None
     except Exception as e:
         logger.error("获取指数数据失败: %s", e)
     return pd.DataFrame()
+
+
+def get_market_environment() -> dict:
+    """
+    判断当前大盘环境（沪指），综合 MA 趋势与近期涨跌幅。
+    返回 {'status': 'bull'|'bear'|'neutral'|'unknown', 'reason': str, 'detail': dict}
+    """
+    start = get_previous_trade_day(30) or (datetime.now() - timedelta(days=50)).strftime('%Y%m%d')
+    df = get_index_daily('000001', start_date=start)
+    if df.empty or len(df) < 10:
+        return {'status': 'unknown', 'reason': '无法获取指数数据', 'detail': {}}
+
+    df = df.sort_values('trade_date').reset_index(drop=True)
+    df['ma5'] = df['close'].rolling(5).mean()
+    df['ma20'] = df['close'].rolling(20).mean()
+
+    latest = df.iloc[-1]
+    ma5 = latest['ma5']
+    ma20 = latest['ma20']
+    close = latest['close']
+    recent3_pct = df['pct_chg'].tail(3).sum()
+
+    bear_signals, bull_signals, reasons = 0, 0, []
+
+    if ma5 < ma20:
+        bear_signals += 1
+        reasons.append(f"MA5({ma5:.2f})<MA20({ma20:.2f})")
+    else:
+        bull_signals += 1
+
+    if close < ma20:
+        bear_signals += 1
+        reasons.append("指数跌破MA20")
+    else:
+        bull_signals += 1
+
+    if recent3_pct < -3:
+        bear_signals += 1
+        reasons.append(f"近3日累跌{recent3_pct:.1f}%")
+    elif recent3_pct > 3:
+        bull_signals += 1
+
+    if bear_signals >= 2:
+        status = 'bear'
+    elif bull_signals >= 2:
+        status = 'bull'
+    else:
+        status = 'neutral'
+
+    reason = '；'.join(reasons) if reasons else '走势平稳'
+    logger.info("大盘环境: %s | %s", status, reason)
+    return {
+        'status': status,
+        'reason': reason,
+        'detail': {
+            'close': round(close, 2),
+            'ma5': round(ma5, 2),
+            'ma20': round(ma20, 2),
+            'recent3_pct': round(recent3_pct, 2),
+        }
+    }

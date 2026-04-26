@@ -13,7 +13,8 @@ import logging
 from datetime import datetime
 from log_config import setup_logging
 from stock_filter import apply_all_filters, get_all_a_stocks
-from data_fetcher import get_stock_basic
+from data_fetcher import get_stock_basic, get_market_environment
+from portfolio_tracker import check_positions, save_positions
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -23,7 +24,28 @@ def main():
     print(f"=== A股选股系统运行中... {datetime.now()} ===")
 
     try:
+        # ── P1：显示持仓跟踪 ──────────────────────────────────────────────────
         stocks = get_stock_basic()
+        position_report = check_positions(stocks)
+        if "暂无持仓记录" not in position_report:
+            print("\n" + position_report + "\n")
+
+        # ── P0：大盘环境判断 ──────────────────────────────────────────────────
+        env = get_market_environment()
+        env_status = env['status']
+        env_reason = env['reason']
+        env_detail = env['detail']
+        env_banner = {
+            'bull':    "🟢 大盘偏强",
+            'neutral': "🟡 大盘中性",
+            'bear':    "🔴 大盘偏弱（熊市预警，建议降低仓位）",
+            'unknown': "⚪ 大盘状态未知",
+        }.get(env_status, "⚪ 大盘状态未知")
+        print(f"\n{env_banner} | {env_reason}")
+        if env_detail:
+            d = env_detail
+            print(f"   沪指: {d.get('close','N/A')}  MA5: {d.get('ma5','N/A')}  MA20: {d.get('ma20','N/A')}  近3日: {d.get('recent3_pct','N/A')}%\n")
+
         filtered = apply_all_filters(stocks)
 
         if filtered.empty:
@@ -33,6 +55,8 @@ def main():
             report = []
             report.append("=" * 60)
             report.append(f"📈 A股智能选股报告 - {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+            report.append("=" * 60)
+            report.append(f"大盘环境: {env_banner} | {env_reason}")
             report.append("=" * 60)
             report.append("\n筛选条件:")
             report.append("1. 近15日非一字板涨停")
@@ -100,6 +124,13 @@ def main():
             }, f, ensure_ascii=False, indent=2)
 
         print(f"\n报告已保存到: {report_file}")
+
+        # ── P1：将本次推荐写入持仓记录 ───────────────────────────────────────
+        if not filtered.empty:
+            added = save_positions(filtered)
+            if added:
+                print(f"已新增 {added} 只股票到持仓跟踪")
+
         return report
 
     except Exception as e:
