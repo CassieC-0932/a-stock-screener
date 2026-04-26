@@ -48,4 +48,43 @@ CONFIG = {
         "stop_loss": -5,       # 止损线%
         "take_profit": 10,     # 止盈线%
     },
+
+    # ── 消息推送（P3）────────────────────────────────────────────────────────
+    # 三个渠道均可独立启用，enabled=False 时该渠道不推送
+    "notify": {
+
+        # 钉钉机器人（推荐）
+        # 创建方式：钉钉群 → 智能群助手 → 添加机器人 → 自定义 → 加签模式
+        "dingtalk": {
+            "enabled": False,
+            "webhook": "https://oapi.dingtalk.com/robot/send?access_token=YOUR_TOKEN",
+            "secret": "YOUR_SECRET",   # 加签密钥，不用加签则填 "" 或删除
+        },
+
+        # 邮件（SMTP）
+        # 以 QQ 邮件为例：smtp_host=smtp.qq.com, port=465, password=授权码（非登录密码）
+        "email": {
+            "enabled": False,
+            "smtp_host": "smtp.qq.com",
+            "smtp_port": 465,
+            "username": "your@qq.com",
+            "password": "YOUR_AUTH_CODE",
+            "to_addrs": ["your@qq.com"],
+        },
+
+        # Server酱（微信推送）：https://sct.ftqq.com 注册后获取 SendKey
+        "serverchan": {
+            "enabled": False,
+            "sendkey": "YOUR_SENDKEY",
+        },
+
+        # 飞书机器人 Webhook
+        # 创建方式：飞书群 → 群设置 → 机器人 → 添加机器人 → 自定义机器人
+        # 安全设置选"签名校验"时填 secret；仅 IP 白名单时 secret 留空
+        "feishu": {
+            "enabled": False,
+            "webhook": "https://open.feishu.cn/open-apis/bot/v2/hook/YOUR_HOOK_ID",
+            "secret": "",   # 签名校验密钥，不启用则留空
+        },
+    },
 }
