@@ -80,7 +80,7 @@ def filter_by_market_cap(df, min_mv=30, max_mv=500):
     return df
 
 
-def analyze_growth_stock(ts_code, hot_sectors):
+def analyze_growth_stock(ts_code, hot_sectors, score_boost=None):
     """分析低位成长股"""
     start_date = get_previous_trade_day(90)
     df = get_daily_data(ts_code, start_date)
@@ -198,6 +198,12 @@ def analyze_growth_stock(ts_code, hot_sectors):
     if not category:
         category = "稳健"
 
+    # Agent 动态加减分：根据 brain 输出的信号历史表现调整得分
+    if score_boost:
+        for sig in signals:
+            score += score_boost.get(sig, 0)
+    score = max(0, score)
+
     return {
         'score': score,
         'signals': signals,
@@ -216,8 +222,18 @@ def analyze_growth_stock(ts_code, hot_sectors):
     }
 
 
-def apply_all_filters(stocks):
-    """应用所有筛选"""
+def apply_all_filters(stocks, agent_params=None):
+    """
+    应用所有筛选。
+    agent_params 由 agent_brain.decide_params() 生成，包含动态阈值与权重；
+    未传入时使用静态默认值。
+    """
+    ap = agent_params or {}
+    min_score = ap.get('min_score', 5)
+    score_boost = ap.get('score_boost', {})
+    preferred_categories = ap.get('preferred_categories', [])
+    cap_min, cap_max = ap.get('market_cap_range', (30, 500))
+
     print(f"原始股票数量: {len(stocks)}")
     df = get_all_a_stocks()
     print(f"剔除ST/北交所/科创板后: {len(df)}")
@@ -236,7 +252,7 @@ def apply_all_filters(stocks):
     rows = [row for _, row in df.iterrows()]
 
     def _analyze(row):
-        return row, analyze_growth_stock(row['ts_code'], hot_sectors)
+        return row, analyze_growth_stock(row['ts_code'], hot_sectors, score_boost)
 
     results = []
     with ThreadPoolExecutor(max_workers=12) as executor:
@@ -274,11 +290,22 @@ def apply_all_filters(stocks):
     df_tech = pd.DataFrame(results)
     df_tech = df_tech.sort_values('score', ascending=False)
 
-    df_final = filter_by_market_cap(df_tech, min_mv=30, max_mv=500)
-    print(f"市值筛选后: {len(df_final)}")
+    # Agent 动态准入门槛
+    df_tech = df_tech[df_tech['score'] >= min_score]
+    print(f"准入门槛（score≥{min_score}）后: {len(df_tech)}")
 
-    if len(df_final) < 10:
-        df_final = filter_by_market_cap(df_tech, min_mv=20, max_mv=800)
+    # Agent 类别偏好过滤（优先推荐历史表现好的类别）
+    if preferred_categories and not df_tech.empty:
+        df_pref = df_tech[df_tech['category'].isin(preferred_categories)]
+        if len(df_pref) >= 5:
+            df_tech = df_pref
+            print(f"类别偏好（{preferred_categories}）过滤后: {len(df_tech)}")
+
+    df_final = filter_by_market_cap(df_tech, min_mv=cap_min, max_mv=cap_max)
+    print(f"市值筛选（{cap_min}-{cap_max}亿）后: {len(df_final)}")
+
+    if len(df_final) < 5:
+        df_final = filter_by_market_cap(df_tech, min_mv=max(10, cap_min - 20), max_mv=cap_max + 300)
         print(f"市值放宽后: {len(df_final)}")
 
     return df_final

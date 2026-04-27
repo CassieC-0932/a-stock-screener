@@ -126,8 +126,11 @@ def check_positions(current_prices: pd.DataFrame = None) -> str:
     return "\n".join(lines)
 
 
-def close_position(ts_code: str, reason: str = "手动平仓") -> bool:
-    """将指定股票的持仓标记为已平仓，返回是否找到并关闭。"""
+def close_position(ts_code: str, exit_price: float = None, reason: str = "手动平仓") -> bool:
+    """
+    将指定股票的持仓标记为已平仓。
+    exit_price: 实际出场价，记录后供 agent_memory 学习；不传则只标记状态。
+    """
     positions = _load_positions()
     found = False
     for p in positions:
@@ -135,10 +138,15 @@ def close_position(ts_code: str, reason: str = "手动平仓") -> bool:
             p['status'] = 'closed'
             p['close_date'] = datetime.now().strftime('%Y-%m-%d')
             p['close_reason'] = reason
+            if exit_price is not None:
+                p['close_price'] = float(exit_price)
+                p['pnl_pct'] = round(
+                    (exit_price - p['entry_price']) / p['entry_price'] * 100, 4
+                )
             found = True
     if found:
         _save_positions(positions)
-        logger.info("平仓: %s（%s）", ts_code, reason)
+        logger.info("平仓: %s @ %s（%s）", ts_code, exit_price or 'N/A', reason)
     return found
 
 
